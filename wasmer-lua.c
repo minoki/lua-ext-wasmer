@@ -28,56 +28,35 @@ static int pushresult(lua_State *L, wasmer_result_t result) {
     }
 }
 
-/* wasmer.instance */
+#define DATATYPE(CTYPE,NAME)                                       \
+    static const char tname_##NAME[] = "wasmer." #NAME;            \
+    static inline CTYPE check_##NAME(lua_State *L, int index) {    \
+        return *(CTYPE *)luaL_checkudata(L, index, tname_##NAME);  \
+    }                                                              \
+    static CTYPE *new_##NAME(lua_State *L) {                       \
+        CTYPE *ptr = (CTYPE *)lua_newuserdata(L, sizeof(CTYPE));   \
+        *ptr = NULL;                                               \
+        luaL_getmetatable(L, tname_##NAME);                        \
+        lua_setmetatable(L, -2);                                   \
+        return ptr;                                                \
+    }                                                              \
+    static int NAME##_gc(lua_State *L) {                           \
+        CTYPE *ptr = (CTYPE *)luaL_checkudata(L, 1, tname_##NAME); \
+        if (*ptr != NULL) {                                        \
+            wasmer_##NAME##_destroy(*ptr);                         \
+            *ptr = NULL;                                           \
+        }                                                          \
+        return 0;                                                  \
+    }                                                              \
+    /**/
+DATATYPE(wasmer_module_t *, module)
+DATATYPE(wasmer_import_descriptors_t *, import_descriptors)
+DATATYPE(wasmer_import_object_t *, import_object)
+DATATYPE(wasmer_instance_t *, instance)
+DATATYPE(wasmer_exports_t *, exports)
+#undef DATATYPE
 
-static const char tname_instance[] = "wasmer.instance";
-
-static inline wasmer_instance_t *check_instance(lua_State *L, int index) {
-    return *(wasmer_instance_t **)luaL_checkudata(L, index, tname_instance);
-}
-
-static wasmer_instance_t **new_instance(lua_State *L) {
-    wasmer_instance_t **ptr = (wasmer_instance_t **)lua_newuserdata(L, sizeof(wasmer_instance_t *));
-    *ptr = NULL;
-    luaL_getmetatable(L, tname_instance);
-    lua_setmetatable(L, -2);
-    return ptr;
-}
-
-static int instance_gc(lua_State *L) {
-    wasmer_instance_t **instance_ptr = (wasmer_instance_t **)luaL_checkudata(L, 1, tname_instance);
-    if (*instance_ptr != NULL) {
-        wasmer_instance_destroy(*instance_ptr);
-        *instance_ptr = NULL;
-    }
-    return 0;
-}
-
-/* wasmer.exports */
-
-static const char tname_exports[] = "wasmer.exports";
-
-static inline wasmer_exports_t *check_exports(lua_State *L, int index) {
-    return *(wasmer_exports_t **)luaL_checkudata(L, index, tname_exports);
-}
-
-static wasmer_exports_t **new_exports(lua_State *L) {
-    wasmer_exports_t **ptr = (wasmer_exports_t **)lua_newuserdata(L, sizeof(wasmer_exports_t *));
-    *ptr = NULL;
-    luaL_getmetatable(L, tname_exports);
-    lua_setmetatable(L, -2);
-    return ptr;
-}
-
-static int exports_gc(lua_State *L) {
-    wasmer_exports_t **exports_ptr = (wasmer_exports_t **)luaL_checkudata(L, 1, tname_exports);
-    if (*exports_ptr != NULL) {
-        wasmer_exports_destroy(*exports_ptr);
-        *exports_ptr = NULL;
-    }
-    return 0;
-}
-
+/* upvalue 1: <lightuserdata wasmer_export_func_t *>, upvalue 2: <userdata wasmer.exports> */
 static int export_call(lua_State *L) {
     int nargs = lua_gettop(L);
     wasmer_export_func_t *func = (wasmer_export_func_t *)lua_touserdata(L, lua_upvalueindex(1));
@@ -194,7 +173,7 @@ static int instance_exports(lua_State *L) {
     return 1;
 }
 
-// instantiate(wasm: string, import_object: table) -> instantiate | nil, error
+// wasmer.instantiate(wasm: string, import_object: table) -> instantiate | nil, error
 static int lwasmer_instantiate(lua_State *L) {
     size_t bytes_len = 0;
     const char *bytes = luaL_checklstring(L, 1, &bytes_len);
@@ -206,6 +185,80 @@ static int lwasmer_instantiate(lua_State *L) {
         return pushresult(L, result);
     }
 }
+
+// wasmer.compile(wasm: string) -> module | nil, error
+static int lwasmer_compile(lua_State *L) {
+    size_t bytes_len = 0;
+    const char *bytes = luaL_checklstring(L, 1, &bytes_len);
+    wasmer_module_t **module_ptr = new_module(L);
+    wasmer_result_t result = wasmer_compile(module_ptr, (uint8_t *)bytes, bytes_len);
+    if (result == WASMER_OK) {
+        return 1;
+    } else {
+        return pushresult(L, result);
+    }
+}
+
+#if 0
+// module:instantiate(import_object) -> instance | nil, error
+static int module_instantiate(lua_State *L) {
+    wasmer_module_t *module = check_module(L, 1);
+    luaL_checkany(L, 2);
+    wasmer_import_descriptors **import_descriptors_ptr = new_import_descriptors(L);
+    wasmer_import_descriptors(module, import_descriptors_ptr);
+    assert(*import_descriptors_ptr != NULL);
+    wasmer_import_descriptors *import_descriptors = *import_descriptors_ptr;
+    unsigned int len = wasmer_import_descriptors_len(import_descriptors);
+
+    wasmer_import_object_t **import_object_ptr = new_import_object(L);
+    *import_object_ptr = wasmer_import_object_new();
+    wasmer_import_object_t *import_object = *import_object_ptr;
+    assert(import_object != NULL); // TODO: proper error handling?
+
+    for (unsigned int i = 0; i < len; ++i) {
+        wasmer_import_descriptor_t *descriptor = wasmer_import_descriptors_get(import_descriptors, i);
+        wasmer_byte_array name = wasmer_import_descriptor_name(descriptor);
+        wasmer_byte_array module_name = wasmer_import_descriptor_module_name(descriptor);
+        switch (wasmer_import_descriptor_kind(descriptor)) {
+        case WASM_FUNCTION:
+            {
+                lua_pushlstring(L, (const char *)name.bytes, name.bytes_len);
+                lua_gettable(L, 2);
+                break;
+            }
+        case WASM_GLOBAL:
+            {
+                break;
+            }
+        case WASM_MEMORY:
+            {
+                break;
+            }
+        case WASM_TABLE:
+            {
+                break;
+            }
+        default:
+            assert(false);
+        }
+    }
+}
+#endif
+
+static const luaL_Reg module_meta[] = {
+    {"__gc", module_gc},
+    {NULL, NULL},
+};
+
+static const luaL_Reg import_descriptors_meta[] = {
+    {"__gc", import_descriptors_gc},
+    {NULL, NULL},
+};
+
+static const luaL_Reg import_object_meta[] = {
+    {"__gc", import_object_gc},
+    {NULL, NULL},
+};
 
 static const luaL_Reg exports_meta[] = {
     {"__gc", exports_gc},
@@ -219,11 +272,24 @@ static const luaL_Reg instance_meta[] = {
 };
 
 static const luaL_Reg funcs[] = {
+    {"compile", lwasmer_compile},
     {"instantiate", lwasmer_instantiate},
     {NULL, NULL},
 };
 
 int luaopen_wasmer(lua_State *L) {
+    luaL_newmetatable(L, tname_module);
+    luaL_setfuncs(L, module_meta, 0);
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, tname_import_descriptors);
+    luaL_setfuncs(L, import_descriptors_meta, 0);
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, tname_import_object);
+    luaL_setfuncs(L, import_object_meta, 0);
+    lua_pop(L, 1);
+
     luaL_newmetatable(L, tname_exports);
     luaL_setfuncs(L, exports_meta, 0);
     lua_pop(L, 1);

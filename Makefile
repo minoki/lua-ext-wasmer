@@ -28,3 +28,16 @@ $T: $(OBJS)
 clean:
 	rm -f $(OBJS) $T
 
+# macOS binary
+libwasmer_runtime_c_api.dylib:
+	curl -LO https://github.com/wasmerio/wasmer/releases/download/0.8.0/libwasmer_runtime_c_api.dylib
+
+# Linux?
+libwasmer_runtime_c_api.so:
+	curl -LO https://github.com/wasmerio/wasmer/releases/download/0.8.0/libwasmer_runtime_c_api.so
+
+# Windows
+wasmer_runtime_c_api.dll:
+	curl -LO https://github.com/wasmerio/wasmer/releases/download/0.8.0/wasmer_runtime_c_api.dll
+
+# curl -LO https://github.com/wasmerio/wasmer/releases/download/0.8.0/wasmer-darwin-amd64.tar.gz
